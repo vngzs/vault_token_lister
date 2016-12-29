@@ -22,6 +22,14 @@ func main() {
 	//fmt.Printf("Getting token accessors from %s\n", targetVaultAddr)
 	//confirm("Are you sure you want to continue? [y/n]")
 
+	self, err := vClient.Auth().Token().LookupSelf()
+	if err != nil {
+		fmt.Printf("error looking up own token: %s\n", err)
+		os.Exit(1)
+	}
+	selfAccessor := self.Data["accessor"].(string)
+
+
 	result, _ := listAccessors(vClient)
 
 	switch accessors := result.Data["keys"].(type) {
@@ -39,8 +47,11 @@ func main() {
 				for _, policy := range typedPolicies {
 					//fmt.Printf(" %s ", policy.(string))
 					if policy.(string) == "root" {
-						fmt.Printf("Root accessor %s\n", accessor)
-						confirm("Do you want to revoke root accessor ")
+						if selfAccessor == accessor {
+							fmt.Printf("Root accessor THIS IS YOU, revoke if you will with 'vault token-revoke -accessor %s'\n", accessor)
+						} else {
+							fmt.Printf("Root accessor, revoke with 'vault token-revoke -accessor %s'\n", accessor)
+						}
 
 					}
 				}
