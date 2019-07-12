@@ -5,22 +5,35 @@
 package main
 
 import (
-	"log"
-	vaultAPI "github.com/hashicorp/vault/api"
+	"crypto/tls"
 	"flag"
-	"os"
 	"fmt"
+	vaultAPI "github.com/hashicorp/vault/api"
+	"log"
+	"net/http"
+	"os"
 )
 
 func main() {
 
-	var targetVaultAddr, vaultRootToken, policy string
-	flag.StringVar(&targetVaultAddr, "targetVaultAddr", "", "vault_addr for the target vault, like https://example2.com:8200")
-	flag.StringVar(&vaultRootToken, "rootToken", "", "Token for targetVaultAddr - must have root privs")
+	// http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	var policy string
+	var rootKey string = "VAULT_TOKEN"
+	var vaultAddrKey string = "VAULT_ADDR"
 	flag.StringVar(&policy, "policy", "root", "Name of policy we're looking for, by default 'root'")
 	flag.Parse()
 
-	vClient := getVaultClient(vaultRootToken, targetVaultAddr)
+	vaultRootToken, hasToken := os.LookupEnv(rootKey)
+	if !hasToken {
+		fmt.Errorf("no root token; export %s to run", rootKey)
+	}
+
+	vaultAddr, hasAddr := os.LookupEnv(vaultAddrKey)
+	if !hasAddr {
+		fmt.Errorf("no vault address; export %s to run", vaultAddrKey)
+	}
+
+	vClient := getVaultClient(vaultRootToken, vaultAddr)
 
 	self, err := vClient.Auth().Token().LookupSelf()
 	if err != nil {
@@ -29,8 +42,10 @@ func main() {
 	}
 	selfAccessor := self.Data["accessor"].(string)
 
-
-	result, _ := listAccessors(vClient)
+	result, err := listAccessors(vClient)
+	if err != nil {
+		panic(err)
+	}
 
 	switch accessors := result.Data["keys"].(type) {
 	case []interface{}:
@@ -38,7 +53,7 @@ func main() {
 		for _, accessor := range accessors {
 			//fmt.Println(i, accessor)
 			details, err := vClient.Auth().Token().LookupAccessor(accessor.(string))
-			if (err != nil) {
+			if err != nil {
 				panic(err)
 			}
 			policies := details.Data["policies"]
@@ -46,7 +61,7 @@ func main() {
 			switch typedPolicies := policies.(type) {
 			case []interface{}:
 				for _, p := range typedPolicies {
-					//fmt.Printf(" %s ", policy.(string))
+					// fmt.Printf(" %s ", policy.(string))
 					if p.(string) == policy {
 						output := fmt.Sprintf("%s accessor displayName=%s: revoke if you will with 'vault token-revoke -accessor %s'\n", policy, displayName, accessor)
 						if selfAccessor == accessor {
@@ -67,18 +82,20 @@ func main() {
 
 }
 
-
-
 // Get vault object using token + vault_addr
 func getVaultClient(token string, vaultAddr string) vaultAPI.Client {
 	var err error
-	var vClient      *vaultAPI.Client
+	var vClient *vaultAPI.Client
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr}
 
-	vaultCFG := *vaultAPI.DefaultConfig()
+	vaultCfg := *vaultAPI.DefaultConfig()
+	vaultCfg.HttpClient = client
 
-	vaultCFG.Address = vaultAddr
-
-	vClient, err = vaultAPI.NewClient(&vaultCFG)
+	vaultCfg.Address = vaultAddr
+	vClient, err = vaultAPI.NewClient(&vaultCfg)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -93,7 +110,7 @@ func listAccessors(client vaultAPI.Client) (*vaultAPI.Secret, error) {
 	request := client.NewRequest("LIST", "/v1/auth/token/accessors")
 
 	resp, err := client.RawRequest(request)
-	if (err != nil) {
+	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
